@@ -1,0 +1,14 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# JS files
+*.js text
+*.json text
+
+# Documentation
+*.md text
+*.txt text
+
+# Audio files
+*.mp3 binary
+*.wav binary 
