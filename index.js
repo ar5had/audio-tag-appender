@@ -86,57 +86,123 @@ function appendRadioTag(mainAudio, radioTag, outputPath) {
                     return;
                 }
 
-                // Create a temporary file for the concatenation
-                const tempFile = path.join(__dirname, 'temp_list.txt');
+                // Get sample rate info for all files to ensure they match
+                console.log(colorLog('\n🔍 Analyzing audio files...', 'magenta', true));
                 
-                // Create a file list for FFmpeg - using the same radio tag for start and end
-                const fileContent = `file '${radioTag}'\nfile '${mainAudio}'\nfile '${radioTag}'`;
-                fs.writeFileSync(tempFile, fileContent);
-
-                // Determine output format settings
-                const outputFormat = getAudioFormat(outputPath);
-                const outputOptions = ['-q:a 0'];
-
-                // Format-specific settings
-                if (outputFormat === 'wav') {
-                    outputOptions.push(
-                        '-acodec pcm_s16le',
-                        `-ar ${audioStream.sample_rate || 44100}`,
-                        `-ac ${audioStream.channels || 2}`
-                    );
-                } else if (outputFormat === 'mp3') {
-                    outputOptions.push(
-                        '-acodec libmp3lame',
-                        audioStream.bit_rate ? `-b:a ${audioStream.bit_rate}` : '-b:a 320k',
-                        `-ar ${audioStream.sample_rate || 44100}`,
-                        `-ac ${audioStream.channels || 2}`
-                    );
-                }
-
-                // Use FFmpeg to concatenate the files while preserving quality
-                const ffmpegCommand = ffmpeg()
-                    .input(tempFile)
-                    .inputOptions(['-f', 'concat', '-safe', '0'])
-                    .outputOptions(outputOptions)
-                    .output(outputPath)
-                    .on('progress', (progress) => {
-                        const percent = Math.round(progress.percent || 0);
-                        process.stdout.write(`\n${colorLog('⏱️  Processing: ', 'blue')}${colorLog(`${percent}%`, 'cyan')}`);
-                    })
-                    .on('end', () => {
-                        fs.unlinkSync(tempFile);
-                        console.log(colorLog('\n✨ Processing completed!', 'green', true));
-                        resolve();
-                    })
-                    .on('error', (err) => {
-                        if (fs.existsSync(tempFile)) {
-                            fs.unlinkSync(tempFile);
-                        }
-                        console.error(colorLog('\n❌ Error:', 'red', true), colorLog(err.message, 'red'));
+                // Analyze radio tag file
+                ffmpeg.ffprobe(radioTag, (err, radioTagInfo) => {
+                    if (err) {
                         reject(err);
-                    });
+                        return;
+                    }
 
-                ffmpegCommand.run();
+                    const radioTagStream = radioTagInfo.streams.find(stream => stream.codec_type === 'audio');
+                    if (!radioTagStream) {
+                        reject(new Error('No audio stream found in radio tag file'));
+                        return;
+                    }
+
+                    // Create temporary files for converted audio if needed
+                    const tempMainAudio = path.join(__dirname, 'temp_main.wav');
+                    const tempRadioTag = path.join(__dirname, 'temp_tag.wav');
+                    
+                    // First, convert both files to WAV with same sample rate
+                    console.log(colorLog('\n⚙️ Preparing audio files...', 'magenta', true));
+                    
+                    // Convert main audio to temp WAV
+                    ffmpeg(mainAudio)
+                        .outputOptions([
+                            '-acodec', 'pcm_s16le',
+                            '-ar', '44100',
+                            '-ac', '2'
+                        ])
+                        .save(tempMainAudio)
+                        .on('end', () => {
+                            // Convert radio tag to temp WAV
+                            ffmpeg(radioTag)
+                                .outputOptions([
+                                    '-acodec', 'pcm_s16le',
+                                    '-ar', '44100',
+                                    '-ac', '2'
+                                ])
+                                .save(tempRadioTag)
+                                .on('end', () => {
+                                    // Now concatenate the WAV files
+                                    console.log(colorLog('\n🎵 Processing audio files...', 'magenta', true));
+
+                                    // Create a temporary file for the concatenation list
+                                    const tempList = path.join(__dirname, 'temp_list.txt');
+                                    const fileContent = `file '${tempRadioTag}'\nfile '${tempMainAudio}'\nfile '${tempRadioTag}'`;
+                                    fs.writeFileSync(tempList, fileContent);
+
+                                    // Determine final output format settings
+                                    const outputFormat = getAudioFormat(outputPath);
+                                    const outputOptions = [];
+
+                                    if (outputFormat === 'wav') {
+                                        outputOptions.push(
+                                            '-acodec', 'pcm_s16le',
+                                            '-ar', '44100',
+                                            '-ac', '2'
+                                        );
+                                    } else if (outputFormat === 'mp3') {
+                                        outputOptions.push(
+                                            '-acodec', 'libmp3lame',
+                                            '-q:a', '0',
+                                            '-ar', '44100',
+                                            '-ac', '2'
+                                        );
+                                    }
+
+                                    // Ensure output directory exists
+                                    const outputDir = path.dirname(outputPath);
+                                    if (!fs.existsSync(outputDir)) {
+                                        fs.mkdirSync(outputDir, { recursive: true });
+                                    }
+
+                                    // Final concatenation
+                                    ffmpeg()
+                                        .input(tempList)
+                                        .inputOptions([
+                                            '-f', 'concat',
+                                            '-safe', '0'
+                                        ])
+                                        .outputOptions(outputOptions)
+                                        .output(outputPath)
+                                        .on('progress', (progress) => {
+                                            const percent = Math.round(progress.percent || 0);
+                                            process.stdout.write(`\n${colorLog('⏱️  Processing: ', 'blue')}${colorLog(`${percent}%`, 'cyan')}`);
+                                        })
+                                        .on('end', () => {
+                                            // Clean up temporary files
+                                            [tempList, tempMainAudio, tempRadioTag].forEach(file => {
+                                                if (fs.existsSync(file)) {
+                                                    fs.unlinkSync(file);
+                                                }
+                                            });
+                                            console.log(colorLog('\n\n✨ Processing completed!', 'green', true));
+                                            resolve();
+                                        })
+                                        .on('error', (err) => {
+                                            // Clean up temporary files
+                                            [tempList, tempMainAudio, tempRadioTag].forEach(file => {
+                                                if (fs.existsSync(file)) {
+                                                    fs.unlinkSync(file);
+                                                }
+                                            });
+                                            console.error(colorLog('\n❌ Error:', 'red', true), colorLog(err.message, 'red'));
+                                            reject(err);
+                                        })
+                                        .run();
+                                })
+                                .on('error', (err) => {
+                                    reject(err);
+                                });
+                        })
+                        .on('error', (err) => {
+                            reject(err);
+                        });
+                });
             });
         } catch (error) {
             reject(colorLog('\nError: ' + error.message, 'red', true));
