@@ -55,7 +55,7 @@ audio-tag-appender/
 └── .env                            # Configuration file
 ```
 
-## Environment Variables
+## Environment Variables in .env files
 
 - `MAIN_AUDIO_PATH`: Path to your main audio file
 - `RADIO_TAG_PATH`: Path to your station tag audio file
